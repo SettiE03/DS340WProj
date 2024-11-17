@@ -1,0 +1,113 @@
+import tensorflow as tf
+import numpy as np
+import shap
+from preprocessing.patch_generator import smash_n_reconstruct
+import preprocessing.filters as f
+from keras import layers, saving
+import matplotlib.pyplot as plt
+from classification import preprocess_single_image
+
+def predict_with_shap(model, filepath, background_data=None):
+    """
+    Make a prediction and explain it using SHAP values
+    """
+    # Preprocess the image
+    processed_image = preprocess_single_image(filepath)
+    input_data = {key: tf.expand_dims(value, axis=0) for key, value in processed_image.items()}
+    
+    # Make prediction
+    prediction = model.predict(input_data)
+    probability = prediction[0][0] * 100
+    
+    # Print prediction result
+    if prediction[0][0] > 0.5:
+        print(f"Prediction: AI-generated image with {probability:.2f}% confidence")
+    else:
+        print(f"Prediction: Real image with {100 - probability:.2f}% confidence")
+
+    # Format the input data as lists for SHAP
+    if background_data is None:
+        # Create background data from the current input
+        background = [
+            input_data['rich_texture'].numpy(),
+            input_data['poor_texture'].numpy()
+        ]
+    else:
+        background = background_data
+
+    # Initialize SHAP explainer with the list of inputs
+    explainer = shap.DeepExplainer(model, background)
+    
+    # Prepare test images as a list
+    test_images = [
+        input_data['rich_texture'].numpy(),
+        input_data['poor_texture'].numpy()
+    ]
+    
+    # Calculate SHAP values
+    shap_values = explainer.shap_values(test_images)
+    
+    # Create visualizations for both rich and poor textures
+    for idx, texture_type in enumerate(['rich_texture', 'poor_texture']):
+        # Get the corresponding shap values and test image
+        current_shap_values = shap_values[0][idx] if isinstance(shap_values[0], list) else shap_values[idx]
+        current_test_image = test_images[idx]
+        
+        # Prepare for visualization
+        abs_shap_values = np.abs(current_shap_values)
+        max_value = np.percentile(abs_shap_values, 99)
+        
+        # Create visualization
+        plt.figure(figsize=(15, 5))
+        plt.suptitle(f'SHAP Analysis for {texture_type.replace("_", " ").title()}')
+        
+        # Original image
+        plt.subplot(1, 3, 1)
+        plt.title('Original Image')
+        plt.imshow(current_test_image[0, :, :, 0], cmap='gray')
+        plt.axis('off')
+        
+        # SHAP values
+        plt.subplot(1, 3, 2)
+        plt.title('SHAP Values')
+        plt.imshow(current_shap_values[0, :, :, 0], cmap='RdBu', vmin=-max_value, vmax=max_value)
+        plt.colorbar()
+        plt.axis('off')
+        
+        # Absolute SHAP values
+        plt.subplot(1, 3, 3)
+        plt.title('Absolute SHAP Values')
+        plt.imshow(abs_shap_values[0, :, :, 0], cmap='hot', vmax=max_value)
+        plt.colorbar()
+        plt.axis('off')
+        
+        plt.tight_layout()
+        plt.show()
+    
+    return shap_values
+
+def hard_tanh(x):
+    return tf.maximum(tf.minimum(x, 1), -1)
+
+@saving.register_keras_serializable(package="Custom")
+class featureExtractionLayer(layers.Layer):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.conv = layers.Conv2D(filters=32, kernel_size=(3,3), activation='relu')
+        self.bn = layers.BatchNormalization()
+        self.activation = layers.Lambda(hard_tanh)
+        
+    def call(self, input):
+        x = self.conv(input)
+        x = self.bn(x)
+        x = self.activation(x)
+        return x
+
+# Load the model
+model = tf.keras.models.load_model('./classifier.keras', 
+                                 custom_objects={'hard_tanh': hard_tanh, 
+                                               'featureExtractionLayer': featureExtractionLayer})
+
+# Example usage
+test_image_path = r'C:\Users\esull\OneDrive\Documents\ds340_final_attempt\Detection-of-AI-generated-images\data\evaluate\7-101055791-560690_ai.jpg'
+shap_values = predict_with_shap(model, test_image_path)
