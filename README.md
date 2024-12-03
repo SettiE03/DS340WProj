@@ -1,0 +1,1 @@
+This is Group 9's GitHub space. We aim to create a reliable and interpretable AI model. Our work expands upon a pre-processing technique, and adds SHAP and LIME to create visual explanations for how the model arrived to its conclusions.
